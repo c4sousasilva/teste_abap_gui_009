@@ -28,8 +28,7 @@ SELECTION-SCREEN SKIP.
 PARAMETERS: p_dtfrom LIKE sy-datum DEFAULT sy-datum,
             p_utfrom LIKE sy-uzeit  DEFAULT sy-uzeit,
             p_numl TYPE zmme_coup_hour AS LISTBOX VISIBLE LENGTH 7  USER-COMMAND art DEFAULT 1.
-
-***RIM-OAY-Inicio-28.06.2023-PRB0042138
+****RIM-OAY-Inicio-28.06.2023-PRB0042138
 SELECTION-SCREEN SKIP.
 SELECT-OPTIONS s_tcode FOR syst-tcode NO INTERVALS . "Transacoes a desconsiderar
 PARAMETERS p_called TYPE xfeld NO-DISPLAY DEFAULT space. "Chamada de outro programa
@@ -41,7 +40,6 @@ SELECTION-SCREEN END OF BLOCK b02.
 * INITIALIZATION
 *&---------------------------------------------------------------------*
 INITIALIZATION.
-
   PERFORM zf_busca_constantes.
 
 *&---------------------------------------------------------------------*
@@ -49,9 +47,24 @@ INITIALIZATION.
 *&---------------------------------------------------------------------*
 START-OF-SELECTION.
 
+** HYPERA - Inicio - WPMO - Ajuste ZMMR431(Materiais) - 12.11.2024 **
+** Se o usuário inserir um material para envio, o sistema não      **
+** ira acionar a regra de bloqueio de erro de envio.               **
+  IF s_matnr IS INITIAL.
+    vg_matnr = abap_false.
+  ELSE.
+    vg_matnr = abap_true.
+  ENDIF.
+** HYPERA - Fim - WPMO - Ajuste ZMMR431(Materiais) - 12.11.2024 **
+
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
   PERFORM zf_lock_instance.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
+  IF vg_matnr IS INITIAL.
+    zmmt_coupaexecdl-repid = sy-repid.
+    zmmt_coupaexecdl-data = sy-datum.
+    zmmt_coupaexecdl-hora = sy-uzeit.
+  ENDIF.
 
   PERFORM zf_ranges.
 
@@ -60,6 +73,17 @@ START-OF-SELECTION.
   PERFORM zf_trata_dados.
 
   PERFORM zf_interface.
+
+** HYPERA - WPO - Inicio - Ajustes ZMMR438 - 25.09.2024.
+** Registrar Data e Hora do Termino do Job **
+  IF vg_matnr IS INITIAL.
+    zmmt_coupaexecdl-data_fim = sy-datum.
+    zmmt_coupaexecdl-hora_fim = sy-uzeit.
+    MODIFY zmmt_coupaexecdl.
+  ENDIF.
+
+** HYPERA - WPO - Fim - Ajustes ZMMR438 - 25.09.2024.
+
 
 *&---------------------------------------------------------------------*
 *&      Form  ZF_BUSCA_CONSTANTES
@@ -205,9 +229,9 @@ ENDFORM.                    " ZF_RANGES
 *&---------------------------------------------------------------------*
 *&      Form  ZF_BUSCA_DADOS
 *&---------------------------------------------------------------------*
-*                                                                      *
+*  Buscar Dados Gerais                                                                    *
 *----------------------------------------------------------------------*
-FORM zf_busca_dados .
+FORM zf_busca_dados.
 
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
   DATA: lt_matnr            TYPE STANDARD TABLE OF mara-matnr,
@@ -229,6 +253,76 @@ FORM zf_busca_dados .
 ***RIM - OAY - Inicio - 16.05.2023 - PRB0042074
   CONSTANTS: c_variante_00hs TYPE syslset VALUE '/MAT_COUPA_00H'.
 ***RIM - OAY - Fim - 16.05.2023 - PRB0042074
+
+
+*** HYPERA - Inicio - WPO - Ajustes ZMMR438 - 28.08.2024.
+  IF p_numl EQ '24'.
+*********************************************************
+*         Se  opção Carga Diaria                        *
+*********************************************************
+    vg_data = p_dtfrom - 1.
+    vg_hora = p_utfrom.
+
+  ELSEIF p_numl EQ '99'.
+*********************************************************
+*         Se  opção Ultima Carga                        *
+*********************************************************
+    SELECT data hora data_fim hora_fim
+     INTO CORRESPONDING FIELDS OF TABLE gt_zmmt_coupaexecdl
+     FROM zmmt_coupaexecdl
+     WHERE repid EQ c_prog.
+    IF sy-subrc EQ 0.
+      SORT gt_zmmt_coupaexecdl BY hora DESCENDING.
+
+      READ TABLE gt_zmmt_coupaexecdl INTO gs_zmmt_coupaexecdl INDEX 1.
+      IF sy-subrc EQ 0.
+* Verificar se os campos Data Fim e Hora fim estão preenchidos *
+        IF gs_zmmt_coupaexecdl-data_fim IS INITIAL AND gs_zmmt_coupaexecdl-hora_fim IS INITIAL.
+          vg_data  =  gs_zmmt_coupaexecdl-data.
+          vg_hora  =  gs_zmmt_coupaexecdl-hora.
+        ELSE. " Caso o contrario executar Job com a data da final da ultima execução.
+          vg_data  =  gs_zmmt_coupaexecdl-data_fim.
+          vg_hora  =  gs_zmmt_coupaexecdl-hora_fim.
+        ENDIF.
+
+      ENDIF.
+
+    ELSE." Caso não encontre nada
+      MESSAGE i784(zmm) DISPLAY LIKE 'E'.
+      LEAVE LIST-PROCESSING.
+    ENDIF.
+
+  ELSE.
+***************************************************************
+* Se  opção Definir Horario                                   *
+***************************************************************
+    vg_data  = p_dtfrom.
+    IF p_numl IS INITIAL.
+      vg_hora  = p_utfrom.
+    ELSE.
+      lv_sum = p_numl.
+
+      IF  p_numl = cg_30.
+
+        lv_sum = cg_1.
+
+        lv_hours =   ( lv_sum * 3600 ) / 2.
+
+      ELSE.
+
+        lv_hours =   ( lv_sum * 3600 ).
+
+      ENDIF.
+      vg_hora  =  p_utfrom - lv_hours.
+
+    ENDIF.
+
+  ENDIF.
+
+  vl_time_of_change  =  vg_hora.
+  vl_date_of_change  =  vg_data.
+
+*** HYPERA - Fim - WPO - Ajustes ZMMR438 - 28.08.2024.
 
 ***RIM - OAY - Inicio - 28.06.2023 - PRB0042138
 * Se a integração for individual
@@ -253,9 +347,9 @@ FORM zf_busca_dados .
     IF sy-subrc EQ 0.
       SORT t_mara BY matnr.
 *     Seleciona dados de controle de integracao
-      SELECT  *
+      SELECT matnr id_coupa
         FROM zmmt280                                    "#EC CI_NOORDER
-        INTO TABLE t_mmt280
+        INTO CORRESPONDING FIELDS OF TABLE t_mmt280
          FOR ALL ENTRIES IN t_mara
        WHERE matnr = t_mara-matnr.
 
@@ -304,8 +398,8 @@ FORM zf_busca_dados .
 
       IF sy-subrc EQ 0.
 *       Obtém dados de controle de integraçào de dados de Centros
-        SELECT *
-          INTO TABLE t_zmmt281
+        SELECT matnr id_coupa werks
+          INTO CORRESPONDING FIELDS OF TABLE t_zmmt281
           FROM zmmt281
           FOR ALL ENTRIES IN t_marc
           WHERE matnr = t_marc-matnr
@@ -357,122 +451,18 @@ FORM zf_busca_dados .
       MESSAGE i784(zmm) DISPLAY LIKE 'E'.
       LEAVE LIST-PROCESSING.
     ENDIF. "Select MARA
-  ELSE.
+
+  ELSE. "  Else do p_called.
 ***RIM - OAY - Fim - 28.06.2023 - PRB0042138
 
-    lv_sum = p_numl.
 
-    IF  p_numl = cg_30.
+** HYPERA - Inicio - WPMO - Ajustes ZMMR431 - 08.10.2024.
+***************************************
+* Se for Selecionado Material na Tela *
+***************************************
+    IF NOT s_matnr IS INITIAL.
 
-      lv_sum = cg_1.
-
-      lv_hours =   ( lv_sum * 3600 ) / 2.
-
-    ELSE.
-
-      lv_hours =   ( lv_sum * 3600 ).
-
-    ENDIF.
-
-    vl_key1 = sy-mandt.
-    vl_key2 = sy-datum.
-    vl_time_of_change  =  p_utfrom - lv_hours.
-
-    " DCN (24/09/2021) Correção data antes da meia noite ----------- Início
-    DATA:
-          lv_horas              TYPE i.
-
-    lv_horas = p_utfrom(2) - lv_sum.
-
-*»-{bgn|mod|RCoimbra|2020.12|20200287}->
-    IF p_dtfrom IS NOT INITIAL.
-      IF lv_horas <= 0.
-
-        IF vl_time_of_change(2) >= 18 AND vl_time_of_change(2) <= 23.
-          vl_date_of_change = p_dtfrom - 1.
-        ELSE.
-          vl_date_of_change = p_dtfrom.
-        ENDIF.
-      ELSE.
-        vl_date_of_change = p_dtfrom.
-      ENDIF.
-    ELSE.
-      vl_date_of_change = sy-datum .
-    ENDIF.
-*<-{end|mod|RCoimbra|2020.12|20200287}-«
-    " DCN (24/09/2021) Correção data antes da meia noite ----------- Início
-    vl_datasistema     =  sy-datum - 1.
-    vl_horasistema     =  '010000'.
-
-
-    CONVERT DATE vl_datasistema
-            TIME vl_horasistema
-            DAYLIGHT SAVING TIME ' '
-            INTO TIME STAMP  vl_datastamp TIME ZONE sy-zonlo.
-*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*
-*                Verifica Material Geral                      *
-*=============================================================*
-* Verifica se existe atualização a nível de dados  mestres do *
-* Materiaís                                                   *
-
-*=============================================================*
-*»-{bgn|ins|RCoimbra|2020.12|20200287}->
-    APPEND LINES OF s_matnr TO rg_objectid.
-*<-{end|ins|RCoimbra|2020.12|20200287}-«
-
-***RIM - OAY - Inicio - 28.06.2023 - PRB0042138
-    IF NOT s_tcode IS INITIAL.
-
-    ENDIF.
-***RIM - OAY - Fim - 28.06.2023 - PRB0042138
-
-    SELECT  objectclas                                  "#EC CI_NOORDER
-            objectid
-            changenr
-            change_ind
-            FROM cdhdr APPENDING TABLE t_cdhdr
-         WHERE objectclas IN rg_objectclas   "MATERIAL
-*»-{bgn|ins|RCoimbra|2020.12|20200287}->
-         AND   objectid   IN rg_objectid
-*<-{end|ins|RCoimbra|2020.12|20200287}-«
-         AND   changenr   IN rg_changenr
-         AND   username   IN rg_username
-         AND   tcode      IN rg_tcode
-         AND  (
-              (    udate  =  vl_date_of_change
-            AND    utime  >= vl_time_of_change
-               ) OR udate >  vl_date_of_change )
-           AND (
-               ( udate  =  cg_date_until
-            AND  utime <=  cg_time_until   )
-            OR   udate <   cg_date_until   ).
-
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*  CLEAR vl_lines.
-*  DESCRIBE TABLE t_cdhdr  LINES vl_lines.
-*  IF vl_lines > 0.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
-*»-{bgn|ins|RCoimbra|2020.12|20200287}->
-* delta por período
-    LOOP AT t_cdhdr INTO wa_cdhdr.
-      COLLECT wa_cdhdr-objectid(18) INTO lt_matnr.
-    ENDLOOP.
-
-* materiais com erro na última sincronização
-    SELECT matnr
-      APPENDING TABLE lt_matnr
-      FROM zmmt280
-      WHERE matnr IN s_matnr
-        AND sync_step_stat = '02'.
-
-    SORT lt_matnr BY table_line.
-    DELETE ADJACENT DUPLICATES FROM lt_matnr COMPARING table_line.
-    IF lt_matnr[] IS NOT INITIAL.
-*<-{end|ins|RCoimbra|2020.12|20200287}-«
-*============================================================*
-*   Verificar se Material modificado a nivel de Mestre       *
-*   de Materiais foi enviado                                 *
-*============================================================*
+*   Seleciona dados de materiais
       SELECT   matnr
                lvorm
                mtart
@@ -484,88 +474,271 @@ FORM zf_busca_dados .
                mfrnr
                bmatn
                mprof
-               FROM mara                                "#EC CI_NOORDER
-               INTO TABLE t_mara
-*»-{bgn|mod|RCoimbra|2020.12|20200287}->
-*             FOR ALL ENTRIES IN t_cdhdr
-*             WHERE matnr = t_cdhdr-objectid(18)
-               FOR ALL ENTRIES IN lt_matnr
-               WHERE matnr = lt_matnr-table_line
-*<-{end|mod|RCoimbra|2020.12|20200287}-«
-               AND  mtart  IN sc_mtart.
+          FROM mara                                     "#EC CI_NOORDER
+          INTO TABLE t_mara
+         WHERE matnr IN s_matnr AND
+               mtart IN sc_mtart.
 
-      IF sy-subrc IS INITIAL.
-        SORT t_mara BY  matnr.
-
-        SELECT  * FROM zmmt280                          "#EC CI_NOORDER
-                 INTO TABLE t_mmt280
-                 FOR ALL ENTRIES IN t_mara
-                 WHERE matnr = t_mara-matnr.
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*               OR sync_step_stat = cg_2.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
+      IF sy-subrc EQ 0.
+        SORT t_mara BY matnr.
+*     Seleciona dados de controle de integracao
+        SELECT matnr id_coupa
+          FROM zmmt280                                  "#EC CI_NOORDER
+          INTO CORRESPONDING FIELDS OF TABLE t_mmt280
+           FOR ALL ENTRIES IN t_mara
+         WHERE matnr = t_mara-matnr.
 
         IF sy-subrc IS INITIAL.
           SORT  t_mmt280  BY matnr.
         ENDIF.
+
+*     Obtem dados de processamento de Dados Básicos materiais
+        LOOP AT t_mara INTO wa_mara.
+
+          READ TABLE t_mmt280 INTO wa_mmt280
+                              WITH KEY matnr = wa_mara-matnr
+                              BINARY SEARCH.
+
+          IF sy-subrc IS INITIAL AND wa_mmt280-id_coupa IS NOT INITIAL.
+            wa_zmmt_coupa_mara-matnr  =   wa_mmt280-matnr . "2137008
+            wa_zmmt_coupa_mara-id     =   wa_mmt280-id_coupa .
+            IF wa_zmmt_coupa_mara-id IS INITIAL.
+*           Envio de 	uma criação
+              wa_zmmt_coupa_mara-tpmod  = 'I'.
+            ELSE.
+*           Envio de uma alteração
+              wa_zmmt_coupa_mara-tpmod  = 'U'.
+            ENDIF.
+          ELSE.
+            wa_zmmt_coupa_mara-matnr  = wa_mara-matnr.
+*         Envio de uma criação
+            wa_zmmt_coupa_mara-tpmod  = 'I'.
+          ENDIF.
+          wa_zmmt_coupa_mara-tpcad      = cg_1.
+
+          wa_zmmt_coupa_mara-date       = sy-datum.
+          wa_zmmt_coupa_mara-time       = sy-uzeit.
+
+          APPEND wa_zmmt_coupa_mara TO t_zmmt_coupa_mara     .
+          CLEAR wa_zmmt_coupa_mara.
+        ENDLOOP.
+
+*     Obtem dados de processamento de Dados de Centros
+        SELECT matnr werks lvorm mmsta beskz steuc zz_herswerks
+          INTO TABLE t_marc
+          FROM marc
+          FOR ALL ENTRIES IN t_mara
+          WHERE matnr EQ t_mara-matnr
+            AND werks IN sc_werks
+            AND beskz NE 'E'.
+
+        IF sy-subrc EQ 0.
+*       Obtém dados de controle de integraçào de dados de Centros
+          SELECT matnr id_coupa werks
+            INTO CORRESPONDING FIELDS OF TABLE t_zmmt281
+            FROM zmmt281
+            FOR ALL ENTRIES IN t_marc
+            WHERE matnr = t_marc-matnr
+              AND werks = t_marc-werks.
+
+          SORT t_zmmt281 BY matnr werks.
+
+          LOOP AT t_marc INTO wa_marc.
+            READ TABLE t_zmmt281 TRANSPORTING NO FIELDS
+              WITH KEY matnr = wa_marc-matnr
+                       werks = wa_marc-werks
+                       BINARY SEARCH.
+            IF sy-subrc IS NOT INITIAL.
+              CLEAR wa_zmmt281.
+              wa_zmmt281-matnr = wa_marc-matnr.
+              wa_zmmt281-werks = wa_marc-werks.
+              APPEND wa_zmmt281 TO t_zmmt281.
+            ENDIF.
+          ENDLOOP.
+
+          SORT t_zmmt281 BY matnr werks.
+          DELETE ADJACENT DUPLICATES FROM t_zmmt281
+                                COMPARING matnr werks.
+
+          LOOP AT t_zmmt281 INTO wa_zmmt281.
+            CLEAR: vl_inser, vl_inser,
+                   vl_current_number,
+                   vl_current_numberx.
+
+            wa_zmmt_coupa_marc-matnr    = wa_zmmt281-matnr. "2137008.
+            wa_zmmt_coupa_marc-id       = wa_zmmt281-id_coupa .
+            wa_zmmt_coupa_marc-werks    = wa_zmmt281-werks.
+            wa_zmmt_coupa_marc-tpcad    = cg_2.
+
+            IF  wa_zmmt281-id_coupa IS INITIAL.
+*           Envio de uma criação
+              wa_zmmt_coupa_marc-tpmod  = 'I'.
+            ELSE.
+*           Envio de uma modificação
+              wa_zmmt_coupa_marc-tpmod  = 'U'.
+            ENDIF.
+
+*         Gerar tabela de Log dados da modificação do centro
+            APPEND wa_zmmt_coupa_marc TO t_zmmt_coupa_marc .
+            CLEAR wa_zmmt_coupa_marc.
+          ENDLOOP.
+        ENDIF. "Select MARC
       ELSE.
         MESSAGE i784(zmm) DISPLAY LIKE 'E'.
         LEAVE LIST-PROCESSING.
-      ENDIF.
+      ENDIF. "Select MARA
+
+
+    ELSE. " Else IF NOT S_MATNR IS INITIAL
+** HYPERA - Inicio - WPMO - Ajustes ZMMR431 - 08.10.2024.
+
+***************************************************************
+*                Verifica Material Geral                      *
+*=============================================================*
+* Verifica se existe atualização a nível de dados  mestres do *
+* Materiaís                                                   *
+
+*=============================================================*
+*»-{bgn|ins|RCoimbra|2020.12|20200287}->
+      APPEND LINES OF s_matnr TO rg_objectid.
+*<-{end|ins|RCoimbra|2020.12|20200287}-«
+
+******************************************************************
+*  Busca os dados dos materiais modificados na data estabelecida *
+******************************************************************
+      SELECT  objectclas                                "#EC CI_NOORDER
+              objectid
+              changenr
+              change_ind
+              FROM cdhdr APPENDING TABLE t_cdhdr
+           WHERE objectclas IN rg_objectclas   "MATERIAL
+*»-{bgn|ins|RCoimbra|2020.12|20200287}->
+           AND   objectid   IN rg_objectid
+*<-{end|ins|RCoimbra|2020.12|20200287}-«
+           AND   changenr   IN rg_changenr
+           AND   username   IN rg_username
+           AND   tcode      IN rg_tcode
+           AND  (
+                (    udate  =  vl_date_of_change
+              AND    utime  >= vl_time_of_change
+                 ) OR udate >  vl_date_of_change )
+             AND (
+                 ( udate  =  cg_date_until
+              AND  utime <=  cg_time_until   )
+              OR   udate <   cg_date_until   ).
+
+
+*»-{bgn|ins|RCoimbra|2020.12|20200287}->
+* delta por período
+      LOOP AT t_cdhdr INTO wa_cdhdr.
+        COLLECT wa_cdhdr-objectid(18) INTO lt_matnr.
+      ENDLOOP.
+
+* materiais com erro na última sincronização
+      SELECT matnr
+        APPENDING TABLE lt_matnr
+        FROM zmmt280
+        WHERE matnr IN s_matnr
+          AND sync_date GE vg_data
+          AND sync_time GE vg_hora
+          AND sync_step_stat = '02'.
+
+      SORT lt_matnr BY table_line.
+      DELETE ADJACENT DUPLICATES FROM lt_matnr COMPARING table_line.
+      IF lt_matnr[] IS NOT INITIAL.
+*<-{end|ins|RCoimbra|2020.12|20200287}-«
+*============================================================*
+*   Verificar se Material modificado a nivel de Mestre       *
+*   de Materiais foi enviado                                 *
+*============================================================*
+        SELECT   matnr
+                 lvorm
+                 mtart
+                 matkl
+                 meins
+                 bstme
+                 ekwsl
+                 mstae
+                 mfrnr
+                 bmatn
+                 mprof
+                 FROM mara                              "#EC CI_NOORDER
+                 INTO TABLE t_mara
+*»-{bgn|mod|RCoimbra|2020.12|20200287}->
+*             FOR ALL ENTRIES IN t_cdhdr
+*             WHERE matnr = t_cdhdr-objectid(18)
+                 FOR ALL ENTRIES IN lt_matnr
+                 WHERE matnr = lt_matnr-table_line
+*<-{end|mod|RCoimbra|2020.12|20200287}-«
+                 AND  mtart  IN sc_mtart.
+
+        IF sy-subrc IS INITIAL.
+          SORT t_mara BY  matnr.
+
+          SELECT  matnr id_coupa
+                   FROM zmmt280                         "#EC CI_NOORDER
+                   INTO CORRESPONDING FIELDS OF TABLE t_mmt280
+                   FOR ALL ENTRIES IN t_mara
+                   WHERE matnr = t_mara-matnr.
+*»-{bgn|del|RCoimbra|2020.12|20200287}->
+*               OR sync_step_stat = cg_2.
+*<-{end|del|RCoimbra|2020.12|20200287}-«
+
+          IF sy-subrc IS INITIAL.
+            SORT  t_mmt280  BY matnr.
+          ENDIF.
+        ELSE.
+          MESSAGE i784(zmm) DISPLAY LIKE 'E'.
+          LEAVE LIST-PROCESSING.
+        ENDIF.
 
 *»-{bgn|mod|RCoimbra|2020.12|20200287}->
 *    LOOP AT t_cdhdr INTO wa_cdhdr.
-      LOOP AT lt_matnr INTO ls_matnr.
+        LOOP AT lt_matnr INTO ls_matnr.
 *<-{end|mod|RCoimbra|2020.12|20200287}-«
 
-        READ TABLE t_mmt280 INTO wa_mmt280
+          READ TABLE t_mmt280 INTO wa_mmt280
 *»-{bgn|mod|RCoimbra|2020.12|20200287}->
 *                       WITH KEY matnr = wa_cdhdr-objectid(18)
-                         WITH KEY matnr = ls_matnr
+                           WITH KEY matnr = ls_matnr
 *<-{end|mod|RCoimbra|2020.12|20200287}-«
-                                                 BINARY SEARCH.
-        IF sy-subrc IS INITIAL
+                                                   BINARY SEARCH.
+          IF sy-subrc IS INITIAL
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
-        AND wa_mmt280-id_coupa IS NOT INITIAL.
+          AND wa_mmt280-id_coupa IS NOT INITIAL.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
 
 *-----------------------------------------------------------*
 *   Gerar  sequência numerica intervalo  de numeração       *
 *-----------------------------------------------------------*
-          wa_zmmt_coupa_mara-matnr  =   wa_mmt280-matnr .   "2137008
-          wa_zmmt_coupa_mara-id     =   wa_mmt280-id_coupa .
+            wa_zmmt_coupa_mara-matnr  =   wa_mmt280-matnr . "2137008
+            wa_zmmt_coupa_mara-id     =   wa_mmt280-id_coupa .
 
-          IF wa_zmmt_coupa_mara-id IS INITIAL.
+            IF wa_zmmt_coupa_mara-id IS INITIAL.
 *         Envio de uma criação
-            wa_zmmt_coupa_mara-tpmod  = 'I'.
+              wa_zmmt_coupa_mara-tpmod  = 'I'.
 
-          ELSE.
+            ELSE.
 *         Envio de uma alteração
-            wa_zmmt_coupa_mara-tpmod  = 'U'.
-          ENDIF.
-        ELSE.
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*        wa_mmt280-mandt = sy-mandt.
-*        wa_zmmt_coupa_mara-matnr  = wa_cdhdr-objectid(18).
-*        wa_mmt280-matnr = wa_cdhdr-objectid(18).
-*        APPEND  wa_mmt280 TO t_mmt280.
-*        CLEAR wa_mmt280 .
-*<-{end|del|RCoimbra|2020.12|20200287}-«
+              wa_zmmt_coupa_mara-tpmod  = 'U'.
+            ENDIF.
+          ELSE.
+
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
-          wa_zmmt_coupa_mara-matnr  = ls_matnr.
+            wa_zmmt_coupa_mara-matnr  = ls_matnr.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
 *       Envio de uma criação
-          wa_zmmt_coupa_mara-tpmod  = 'I'.
+            wa_zmmt_coupa_mara-tpmod  = 'I'.
+          ENDIF.
+          wa_zmmt_coupa_mara-tpcad      = cg_1.
 
-        ENDIF.
-        wa_zmmt_coupa_mara-tpcad      = cg_1.
-        wa_zmmt_coupa_mara-date       = sy-datum.
-        wa_zmmt_coupa_mara-time       = sy-uzeit.
+          wa_zmmt_coupa_mara-date       = sy-datum.
+          wa_zmmt_coupa_mara-time       = sy-uzeit.
 
 *     Gerar tabela de Log
-        APPEND wa_zmmt_coupa_mara TO t_zmmt_coupa_mara     .
-        CLEAR wa_zmmt_coupa_mara.
-      ENDLOOP.
+          APPEND wa_zmmt_coupa_mara TO t_zmmt_coupa_mara     .
+          CLEAR wa_zmmt_coupa_mara.
+        ENDLOOP.
 *+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*
 *                      VERIFICA CENTRO                        *
 *=============================================================*
@@ -573,199 +746,142 @@ FORM zf_busca_dados .
 *    no Material                                              *
 *=============================================================*
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
-      IF t_cdhdr[] IS NOT INITIAL.
+        IF t_cdhdr[] IS NOT INITIAL.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
 
 ***   RIM - OAY - Inicio - 16.05.2023 - PRB0042074
 *     Quando executado com a variante diferente das 00hs,
 *     considerar somente as modificações de centros do material
 *     na data e hora calculada no processamento.
-        IF sy-slset NE c_variante_00hs.
+          IF sy-slset NE c_variante_00hs.
 ***   RIM - OAY - Fim - 16.05.2023 - PRB0042074
 
-          REFRESH t_cdpos.
-          SELECT * FROM cdpos APPENDING TABLE t_cdpos   "#EC CI_NOORDER
-                       FOR ALL ENTRIES  IN t_cdhdr
-                       WHERE  objectclas EQ t_cdhdr-objectclas
-                       AND   objectid   EQ t_cdhdr-objectid
-                       AND   changenr   EQ t_cdhdr-changenr
-                       AND   tabname    IN ('MARC', 'MBEW').
+            REFRESH t_cdpos.
+            SELECT tabkey
+              FROM cdpos APPENDING CORRESPONDING FIELDS OF TABLE t_cdpos "#EC CI_NOORDER
+                         FOR ALL ENTRIES  IN t_cdhdr
+                         WHERE  objectclas EQ t_cdhdr-objectclas
+                         AND   objectid   EQ t_cdhdr-objectid
+                         AND   changenr   EQ t_cdhdr-changenr
+                         AND   tabname    IN ('MARC', 'MBEW').
 
 ***   RIM - OAY - Inicio - 16.05.2023 - PRB0042074
 *     Se a execução está sendo feita com a variante das 00hs,
 *     não considerar seleção por CHANGENR para considerar
 *     todas as modificações de centros do material.
-        ELSE.
+          ELSE.
 
-          REFRESH t_cdpos.
-          SELECT * FROM cdpos APPENDING TABLE t_cdpos   "#EC CI_NOORDER
-                       FOR ALL ENTRIES  IN t_cdhdr
-                       WHERE  objectclas EQ t_cdhdr-objectclas
-                       AND   objectid   EQ t_cdhdr-objectid
-                       AND   tabname    IN ('MARC', 'MBEW').
+            REFRESH t_cdpos.
+            SELECT tabkey FROM cdpos
+              APPENDING CORRESPONDING FIELDS OF TABLE t_cdpos "#EC CI_NOORDER
+                         FOR ALL ENTRIES  IN t_cdhdr
+                         WHERE  objectclas EQ t_cdhdr-objectclas
+                         AND   objectid   EQ t_cdhdr-objectid
+                         AND   tabname    IN ('MARC', 'MBEW').
 
-        ENDIF.
+          ENDIF.
 ***   RIM - OAY - Fim - 16.05.2023 - PRB0042074
 
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
-      ENDIF.
+        ENDIF.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
 
 
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
 *   delta por período
-      LOOP AT t_cdpos INTO wa_cdpos.
-        ls_marc_ref = wa_cdpos-tabkey.
-        CHECK ls_marc_ref-werks IN sc_werks.
-        COLLECT ls_marc_ref INTO lt_marc_ref.
-      ENDLOOP.
+        LOOP AT t_cdpos INTO wa_cdpos.
+          ls_marc_ref = wa_cdpos-tabkey.
+          CHECK ls_marc_ref-werks IN sc_werks.
+          COLLECT ls_marc_ref INTO lt_marc_ref.
+        ENDLOOP.
 
 *   materiais com erro na última sincronização
-      SELECT matnr werks
-        APPENDING CORRESPONDING FIELDS OF TABLE lt_marc_ref
-        FROM zmmt281
-        WHERE matnr IN s_matnr
-          AND werks IN sc_werks
-          AND sync_step_stat = '02'.
+        SELECT matnr werks
+          APPENDING CORRESPONDING FIELDS OF TABLE lt_marc_ref
+          FROM zmmt281
+          WHERE matnr IN s_matnr
+            AND werks IN sc_werks
+            AND sync_step_stat = '02'.
 
-      SORT lt_marc_ref BY matnr werks.
-      DELETE ADJACENT DUPLICATES FROM lt_marc_ref COMPARING matnr werks.
-      IF lt_marc_ref[] IS NOT INITIAL.
+        SORT lt_marc_ref BY matnr werks.
+        DELETE ADJACENT DUPLICATES FROM lt_marc_ref COMPARING matnr werks.
+        IF lt_marc_ref[] IS NOT INITIAL.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
-
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*    CLEAR vl_linespos.
-**   Calcula qnt linhas tem na tabela cdpos
-*    DESCRIBE TABLE t_cdpos  LINES vl_linespos.
-*    IF vl_linespos > 0.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
 
 *============================================================*
 *   Verificar se Material modificado a nivel de Centro       *
 *   foi enviado (tem o id coupa ou não)                      *
 *============================================================*
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*      SELECT  * FROM zmmt281
-*        INTO TABLE t_zmmt281
-*        FOR ALL ENTRIES IN t_cdpos
-*        WHERE matnr = t_cdpos-objectid(18).
-**        OR sync_step_stat = cg_2.
-*      IF sy-subrc IS INITIAL.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
-
 *     Dados de centro para material
-        SELECT matnr werks lvorm mmsta beskz steuc zz_herswerks
-          INTO TABLE t_marc
-          FROM marc
+          SELECT matnr werks lvorm mmsta beskz steuc zz_herswerks
+            INTO TABLE t_marc
+            FROM marc
 *»-{bgn|mod|RCoimbra|2020.12|20200287}->
 *        FOR ALL ENTRIES IN t_cdpos
 *        WHERE matnr =  t_cdpos-objectid(18)
 *          AND werks  IN sc_werks
-          FOR ALL ENTRIES IN lt_marc_ref
-          WHERE matnr = lt_marc_ref-matnr
-            AND werks = lt_marc_ref-werks
+            FOR ALL ENTRIES IN lt_marc_ref
+            WHERE matnr = lt_marc_ref-matnr
+              AND werks = lt_marc_ref-werks
 *<-{end|mod|RCoimbra|2020.12|20200287}-«
-            AND beskz NE 'E'.
+              AND beskz NE 'E'.
 
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
-        SELECT *
-          INTO TABLE t_zmmt281
-          FROM zmmt281
-          FOR ALL ENTRIES IN lt_marc_ref
-          WHERE matnr = lt_marc_ref-matnr
-            AND werks = lt_marc_ref-werks.
+          SELECT matnr id_coupa werks
+            INTO CORRESPONDING FIELDS OF TABLE t_zmmt281
+            FROM zmmt281
+            FOR ALL ENTRIES IN lt_marc_ref
+            WHERE matnr = lt_marc_ref-matnr
+              AND werks = lt_marc_ref-werks.
 
-        SORT t_zmmt281 BY matnr werks.
-        LOOP AT t_marc INTO wa_marc.
-          READ TABLE t_zmmt281 TRANSPORTING NO FIELDS
-            WITH KEY matnr = wa_marc-matnr
-                     werks = wa_marc-werks
-                     BINARY SEARCH.
-          IF sy-subrc IS NOT INITIAL.
-            CLEAR wa_zmmt281.
-            wa_zmmt281-matnr = wa_marc-matnr.
-            wa_zmmt281-werks = wa_marc-werks.
-            INSERT wa_zmmt281 INTO t_zmmt281 INDEX sy-tabix.
-          ENDIF.
-        ENDLOOP.
+          SORT t_zmmt281 BY matnr werks.
+          LOOP AT t_marc INTO wa_marc.
+            READ TABLE t_zmmt281 TRANSPORTING NO FIELDS
+              WITH KEY matnr = wa_marc-matnr
+                       werks = wa_marc-werks
+                       BINARY SEARCH.
+            IF sy-subrc IS NOT INITIAL.
+              CLEAR wa_zmmt281.
+              wa_zmmt281-matnr = wa_marc-matnr.
+              wa_zmmt281-werks = wa_marc-werks.
+              INSERT wa_zmmt281 INTO t_zmmt281 INDEX sy-tabix.
+            ENDIF.
+          ENDLOOP.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
 
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*      LOOP AT t_cdpos INTO wa_cdpos.
-*
-*        READ TABLE t_zmmt281 INTO wa_zmmt281 WITH KEY matnr = wa_cdpos-objectid(18)
-*                                                     werks = wa_cdpos-tabkey+21(04).
-*
-*        IF NOT sy-subrc IS INITIAL.
-*          LOOP AT t_marc INTO  wa_marc WHERE matnr =  wa_cdpos-objectid(18).
-*
-*            wa_zmmt281-mandt = sy-mandt.
-*            wa_zmmt281-matnr = wa_cdpos-objectid(18).
-*            wa_zmmt281-werks = wa_marc-werks.
-*            APPEND  wa_zmmt281 TO t_zmmt281.
-*
-*          ENDLOOP.
-*        ENDIF.
-*        CLEAR wa_zmmt281.
-*      ENDLOOP.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
-
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*      ELSE.
-*
-**       Dados de centro para material
-*        SELECT matnr werks lvorm mmsta beskz steuc zz_herswerks
-*          INTO TABLE t_marc
-*          FROM marc
-*          FOR ALL ENTRIES IN t_cdpos
-*          WHERE matnr =  t_cdpos-objectid(18)
-*            AND beskz NE 'E'.
-*        LOOP AT t_cdpos INTO wa_cdpos.
-*
-*          LOOP AT t_marc INTO wa_marc WHERE  matnr =  wa_cdpos-objectid(18).
-*
-*            wa_zmmt281-mandt = sy-mandt.
-*            wa_zmmt281-matnr = wa_cdpos-objectid(18).
-*            wa_zmmt281-werks = wa_marc-werks.
-*            APPEND  wa_zmmt281 TO t_zmmt281.
-*
-*            CLEAR wa_zmmt281.
-*          ENDLOOP.
-*        ENDLOOP.
-*      ENDIF.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
-
-        SORT t_zmmt281 BY matnr werks.
-        DELETE ADJACENT DUPLICATES FROM t_zmmt281 COMPARING matnr werks.
+          SORT t_zmmt281 BY matnr werks.
+          DELETE ADJACENT DUPLICATES FROM t_zmmt281 COMPARING matnr werks.
 
 *     Em caso se sucesso
-        LOOP AT t_zmmt281 INTO wa_zmmt281.
-          CLEAR: vl_inser, vl_inser,
-                 vl_current_number,
-                 vl_current_numberx.
+          LOOP AT t_zmmt281 INTO wa_zmmt281.
+            CLEAR: vl_inser, vl_inser,
+                   vl_current_number,
+                   vl_current_numberx.
 
-          vl_current_numberx          =    vl_current_number.
-          wa_zmmt_coupa_marc-matnr    =    wa_zmmt281-matnr. "2137008.
-          wa_zmmt_coupa_marc-id       =    wa_zmmt281-id_coupa .
-          wa_zmmt_coupa_marc-werks    =    wa_zmmt281-werks.
+            vl_current_numberx          =    vl_current_number.
+            wa_zmmt_coupa_marc-matnr    =    wa_zmmt281-matnr. "2137008.
+            wa_zmmt_coupa_marc-id       =    wa_zmmt281-id_coupa .
+            wa_zmmt_coupa_marc-werks    =    wa_zmmt281-werks.
 
-          IF  wa_zmmt281-id_coupa IS INITIAL.
+            IF  wa_zmmt281-id_coupa IS INITIAL.
 *         Envio de uma criação
-            wa_zmmt_coupa_marc-tpmod  = 'I'.
-          ELSE.
+              wa_zmmt_coupa_marc-tpmod  = 'I'.
+            ELSE.
 *         Envio de uma modificação
-            wa_zmmt_coupa_marc-tpmod  = 'U'.
-          ENDIF.
-          wa_zmmt_coupa_marc-tpcad    = cg_2.
+              wa_zmmt_coupa_marc-tpmod  = 'U'.
+            ENDIF.
+            wa_zmmt_coupa_marc-tpcad    = cg_2.
 
 *       Gerar tabela de Log dados da modificação do centro
-          APPEND wa_zmmt_coupa_marc  TO t_zmmt_coupa_marc .
-          CLEAR wa_zmmt_coupa_marc.
-          CLEAR wa_zmmt281.
-        ENDLOOP.
+            APPEND wa_zmmt_coupa_marc  TO t_zmmt_coupa_marc .
+            CLEAR wa_zmmt_coupa_marc.
+            CLEAR wa_zmmt281.
+          ENDLOOP.
 
-      ENDIF.
-    ENDIF."Check registro cdhdr
+        ENDIF.
+      ENDIF."Check registro cdhdr
+
+    ENDIF.
 
 ***RIM - OAY - Inicio - 28.06.2023 - PRB0042138
   ENDIF. "IF p_called
@@ -777,16 +893,6 @@ FORM zf_busca_dados .
     ls_objek = wa_zmmt_coupa_mara-matnr.
     COLLECT ls_objek INTO lt_objek.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-**   Tipo de material
-*    wa_objk-sign   = 'I'.
-*    wa_objk-option = 'EQ'.
-*    wa_objk-low    = wa_zmmt_coupa_mara-matnr.
-*    APPEND wa_objk TO rg_objk.
-*    CLEAR: wa_objk, wa_zmmt_coupa_mara-matnr.
-*
-*    CLEAR wa_zmmt_coupa_mara.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
   ENDLOOP.
 
   LOOP AT t_zmmt_coupa_marc INTO wa_zmmt_coupa_marc.
@@ -795,16 +901,6 @@ FORM zf_busca_dados .
     ls_objek = wa_zmmt_coupa_marc-matnr.
     COLLECT ls_objek INTO lt_objek.
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-**   Tipo de material
-*    wa_objk-sign   = 'I'.
-*    wa_objk-option = 'EQ'.
-*    wa_objk-low    = wa_zmmt_coupa_marc-matnr.
-*    APPEND wa_objk TO rg_objk.
-*    CLEAR: wa_objk, wa_zmmt_coupa_marc-matnr.
-*
-*    CLEAR wa_zmmt_coupa_marc.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
   ENDLOOP.
 
   IF NOT t_zmmt_coupa_saida IS INITIAL.
@@ -853,14 +949,6 @@ FORM zf_busca_dados .
 *      AND mtart IN rg_mtart.
       AND mtart IN sc_mtart.
 
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*    .
-*    IF sy-subrc <> 0.
-**   MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
-**         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
-*    ENDIF.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
-
     REFRESH t_marc.
 *   Dados de centro para material
     SELECT matnr werks lvorm mmsta beskz steuc zz_herswerks
@@ -887,13 +975,6 @@ FORM zf_busca_dados .
 *      FOR ALL ENTRIES IN lt_zmmt_coupa_saida
 *      WHERE matnr = lt_zmmt_coupa_saida-matnr
 *<-{end|mod|RCoimbra|2020.12|20200287}-«
-
-*»-{bgn|del|RCoimbra|2020.12|20200287}->
-*    SORT  rg_objk BY low.
-*    DELETE ADJACENT DUPLICATES FROM rg_objk COMPARING ALL FIELDS.
-*
-*    SORT  rg_objk BY low.
-*<-{end|del|RCoimbra|2020.12|20200287}-«
 
 *   Valores das modalidades das características
     SELECT objek atinn klart atwrt
@@ -931,6 +1012,7 @@ FORM zf_busca_dados .
     ENDIF.
   ENDIF.
 
+
 ENDFORM.                    " ZF_BUSCA_DADOS
 *&---------------------------------------------------------------------*
 *&      Form  ZF_TRATA_DADOS
@@ -948,9 +1030,6 @@ FORM zf_trata_dados .
         t_mara  BY matnr,
         t_marc  BY matnr  werks,
         t_mbew  BY matnr  bwkey.
-***     RIM - OAY - Inicio - INC0106546 - 25.05.2022
-*       t_mbew  BY matnr.
-***     RIM - OAY - Fim - INC0106546 - 25.05.2022
 
   LOOP AT  t_zmmt_coupa_saida INTO wa_zmmt_coupa_saida.
 
@@ -1000,8 +1079,6 @@ FORM zf_trata_dados .
 **** FIM - DCN - 27/01/2022
 
 
-
-
     READ TABLE t_makt INTO wa_makt
          WITH KEY matnr = wa_zmmt_coupa_saida-matnr
                  spras  = cg_pt
@@ -1045,27 +1122,6 @@ FORM zf_trata_dados .
 
     ENDIF.
 
-*    READ TABLE t_ekpo INTO wa_ekpo WITH KEY matnr = wa_zmmt_coupa_saida-matnr
-*                                            werks = wa_zmmt_coupa_saida-werks
-*                                            BINARY SEARCH.
-*    IF sy-subrc = 0.
-**     wa_saida-price = wa_ekpo-netwr.
-*
-*      wa_saida-price = wa_ekpo-netpr / wa_ekpo-peinh.
-*    ELSE.
-*      READ TABLE t_ekpo INTO wa_ekpo WITH KEY matnr = wa_zmmt_coupa_saida-matnr
-*                                                 werks = sc_werks-low
-*                                              BINARY SEARCH.
-*      IF sy-subrc EQ 0.
-*        wa_saida-price = wa_ekpo-netpr / wa_ekpo-peinh.
-*      ENDIF.
-*
-*    ENDIF.
-*
-*    IF wa_saida-price IS INITIAL.
-*      wa_saida-price = '00.01'.
-*    ENDIF.
-
     READ TABLE t_mara INTO wa_mara
          WITH KEY matnr = wa_zmmt_coupa_saida-matnr
                                    BINARY SEARCH.
@@ -1090,10 +1146,7 @@ FORM zf_trata_dados .
         EXCEPTIONS
           unit_not_found = 1
           OTHERS         = 2.
-      IF sy-subrc <> 0.
-* MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
-*         WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
-      ENDIF.
+
 
       wa_saida-mat_interno   = wa_mara-bmatn.
       wa_saida-manufact_name = wa_mara-mfrnr.
@@ -1142,17 +1195,7 @@ FORM zf_trata_dados .
                     atzhl = wa_auspaux-atzhl.
       wa_saida-comodity_name = wa_cawnt-atwtb.
     ENDIF.
-    "CASS-[20200287]-17.04.2021 16:37:26-[comment]-I
-*    IF wa_saida-comodity_name IS INITIAL.
-*
-*      SELECT SINGLE wgbez
-*        FROM t023t
-*        INTO wa_saida-comodity_name
-*       WHERE spras = sy-langu
-*         AND matkl = wa_mara-matkl.
-*
-*    ENDIF.
-    "CASS-[20200287]-17.04.2021 16:37:26-[comment]-F
+
 
     wa_saida-supplier_number = 99999999.
 
@@ -1195,12 +1238,12 @@ FORM zf_interface .
         lv_hora    TYPE uzeit. "DCN
   CLEAR : wa_saida, wa_cdhdr.
 
-
-  "DCN - inicio
+*DCN - inicio
   lv_data = sy-datum.
   lv_hora = sy-uzeit.
-  "DCN - fim
+*DCN - fim
 
+  APPEND s_matnr TO rg_matnr.
 
   SORT t_cdhdr BY objectid.
 *+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*
@@ -1311,8 +1354,8 @@ FORM zf_interface .
 
           WHEN cg_2.
 
-            SELECT  * FROM zmmt281                      "#EC CI_NOORDER
-                   INTO TABLE t_zmmt281
+            SELECT matnr id_coupa werks FROM zmmt281    "#EC CI_NOORDER
+                   INTO CORRESPONDING FIELDS OF TABLE t_zmmt281
                           WHERE matnr = wa_zmmt_coupa_marc-matnr
                           AND   werks = wa_zmmt_coupa_marc-werks.
             IF NOT sy-subrc IS INITIAL.
