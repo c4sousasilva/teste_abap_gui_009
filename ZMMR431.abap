@@ -417,7 +417,7 @@ FORM zf_busca_dados .
 
 *=============================================================*
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
-    APPEND LINES OF s_matnr TO rg_objectid.
+    APPEND LINES OF s_matnr TO rg_objectid. "#EC CI_FLDEXT_OK[2215424]
 *<-{end|ins|RCoimbra|2020.12|20200287}-«
 
 ***RIM - OAY - Inicio - 28.06.2023 - PRB0042138
@@ -454,10 +454,14 @@ FORM zf_busca_dados .
 *<-{end|del|RCoimbra|2020.12|20200287}-«
 *»-{bgn|ins|RCoimbra|2020.12|20200287}->
 * delta por período
+*--->S4 MIGRATION 02/01/2024 - MA
+*    LOOP AT t_cdhdr INTO wa_cdhdr.
+*      COLLECT wa_cdhdr-objectid(18) INTO lt_matnr.
+*    ENDLOOP.
     LOOP AT t_cdhdr INTO wa_cdhdr.
-      COLLECT wa_cdhdr-objectid(18) INTO lt_matnr.
+      COLLECT wa_cdhdr-objectid(40) INTO lt_matnr.
     ENDLOOP.
-
+*<---S4 MIGRATION 02/01/2024 - MA
 * materiais com erro na última sincronização
     SELECT matnr
       APPENDING TABLE lt_matnr
